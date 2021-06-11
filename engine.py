@@ -12,6 +12,7 @@ from timm.utils import accuracy, ModelEma
 
 import utils
 
+import ipdb
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
@@ -25,9 +26,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 10
+    print_freq = 0
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
+        print("samples shape = ", samples.shape)
+        # ipdb.set_trace()
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
@@ -35,6 +38,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast():
+            
             outputs = model(samples)
             if isinstance(outputs, list):
                 loss_list = [criterion(o, targets) / len(outputs) for o in outputs]

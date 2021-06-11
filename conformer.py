@@ -5,6 +5,8 @@ from functools import partial
 
 from timm.models.layers import DropPath, trunc_normal_
 
+import ipdb
+
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
@@ -416,7 +418,11 @@ class Conformer(nn.Module):
 
 
     def forward(self, x):
+        ##x.shape为[BS, 3, 224, 224]
         B = x.shape[0]
+        
+        ##每一个样本都有1个cls_token，因此需要在第1个维度进行Batch_Size的扩充
+        ##cls_tokens.shape为torch.Size([BS, 1, 384])
         cls_tokens = self.cls_token.expand(B, -1, -1)
 
         # pdb.set_trace()
@@ -424,22 +430,39 @@ class Conformer(nn.Module):
         x_base = self.maxpool(self.act1(self.bn1(self.conv1(x))))
 
         # 1 stage
+        ##[N, 64, 56, 56] -> [N, 64, 56, 56]
         x = self.conv_1(x_base, return_x_2=False)
 
+        ##[N,  64, 56, 56] -> [N, 384, 14, 14]
+        ##[N, 384, 14, 14] -> [N, 384, 196]
+        ##[N, 384, 196] -> [N, 196, 384]
         x_t = self.trans_patch_conv(x_base).flatten(2).transpose(1, 2)
+        ##[N, 196, 384] -> [N, 197, 384]
         x_t = torch.cat([cls_tokens, x_t], dim=1)
+        ##[N, 197, 384] -> [N, 197, 384]
         x_t = self.trans_1(x_t)
         
-        # 2 ~ final 
+        # 2 ~ final
         for i in range(2, self.fin_stage):
+            ##01-stage: [N,  64, 56, 56] [N, 197, 384]
+            ##05-stage: [N, 128, 28, 28] [N, 197, 384]
+            ##09-stage: [N, 256, 14, 14] [N, 197, 384]
+            ##12-stage: [N, 256,  7,  7] [N, 197, 384]
             x, x_t = eval('self.conv_trans_' + str(i))(x, x_t)
+            # ipdb.set_trace()
 
+        ipdb.set_trace()
         # conv classification
+        ##[N, 256,  7,  7] -> [N, 256,  1,  1]
+        ##[N, 256,  1,  1] -> [N, 256]
         x_p = self.pooling(x).flatten(1)
+        ##[N, 256] -> [N, num_classes]
         conv_cls = self.conv_cls_head(x_p)
 
         # trans classification
+        ##[N, 197, 384] -> [N, 197, 384]
         x_t = self.trans_norm(x_t)
+        ##[N, 384] -> [N, num_classes]
         tran_cls = self.trans_cls_head(x_t[:, 0])
 
         return [conv_cls, tran_cls]
