@@ -150,20 +150,29 @@ class FCUDown(nn.Module):
                  norm_layer=partial(nn.LayerNorm, eps=1e-6)):
         super(FCUDown, self).__init__()
         self.dw_stride = dw_stride
-
+        ##对应图2(b)中1x1Conv
         self.conv_project = nn.Conv2d(inplanes, outplanes, kernel_size=1, stride=1, padding=0)
+        ##对应图2(b)中Down
         self.sample_pooling = nn.AvgPool2d(kernel_size=dw_stride, stride=dw_stride)
-
+        ##对应图2(b)中LayerNorm
         self.ln = norm_layer(outplanes)
         self.act = act_layer()
 
     def forward(self, x, x_t):
+        ##x.shape为torch.Size([2, 16, 56, 56])
+        ##x_t.shape为torch.Size([2, 197, 384])
+        ##[2, 16, 56, 56] -> [2, 384, 56, 56]
         x = self.conv_project(x)  # [N, C, H, W]
 
+        ##[2, 384, 56, 56] -> [2, 384, 14, 14]
+        ##[2, 384, 14, 14] -> [2, 384, 196]
+        ##[2, 384, 196] -> [2, 196, 384]
         x = self.sample_pooling(x).flatten(2).transpose(1, 2)
+        ##[2, 196, 384] -> [2, 196, 384]
         x = self.ln(x)
+        ##[2, 196, 384] -> [2, 196, 384]
         x = self.act(x)
-
+        ##[2, 384] -> [2, 1, 384] -> [2, 197, 384]
         x = torch.cat([x_t[:, 0][:, None, :], x], dim=1)
 
         return x
@@ -178,16 +187,26 @@ class FCUUp(nn.Module):
         super(FCUUp, self).__init__()
 
         self.up_stride = up_stride
+        ##对应图2(b)中1x1Conv
         self.conv_project = nn.Conv2d(inplanes, outplanes, kernel_size=1, stride=1, padding=0)
+        ##对应图2(b)中BatchNorm
         self.bn = norm_layer(outplanes)
         self.act = act_layer()
 
     def forward(self, x, H, W):
+        ##x.shape为torch.Size([2, 197, 384])
+        ##H为14、W为14
+
+        ipdb.set_trace()
+        ##C为384
         B, _, C = x.shape
         # [N, 197, 384] -> [N, 196, 384] -> [N, 384, 196] -> [N, 384, 14, 14]
         x_r = x[:, 1:].transpose(1, 2).reshape(B, C, H, W)
+        ##[N, 384, 14, 14] -> [N, 16, 14, 14]
         x_r = self.act(self.bn(self.conv_project(x_r)))
 
+        ##对应图2(b)中UP
+        ##[N, 16, 14, 14]对应[N, 16, 56, 56]
         return F.interpolate(x_r, size=(H * self.up_stride, W * self.up_stride))
 
 
@@ -273,8 +292,10 @@ class ConvTransBlock(nn.Module):
                 self.med_block.append(Med_ConvBlock(inplanes=outplanes, groups=groups))
             self.med_block = nn.ModuleList(self.med_block)
 
+        ##CNN feature maps -> Transformer patch embeddings
         self.squeeze_block = FCUDown(inplanes=outplanes // expansion, outplanes=embed_dim, dw_stride=dw_stride)
 
+        ##Transformer patch embeddings -> CNN feature maps
         self.expand_block = FCUUp(inplanes=embed_dim, outplanes=outplanes // expansion, up_stride=dw_stride)
 
         self.trans_block = Block(
@@ -287,19 +308,29 @@ class ConvTransBlock(nn.Module):
         self.last_fusion = last_fusion
 
     def forward(self, x, x_t):
+        ##x.shape为torch.Size([N, 64, 56, 56])
+        ##x_t.shape为torch.Size([N, 197, 384])
+        ##以第2个stage为例
+        ##x.shape为torch.Size([N, 64, 56, 56])
+        ##x2.shape为torch.Size([N, 16, 56, 56])
         x, x2 = self.cnn_block(x)
 
         _, _, H, W = x2.shape
 
+        ##CNN feature maps -> Transformer patch embeddings
+        ##x_st.shape为torch.Size([N, 197, 384])
         x_st = self.squeeze_block(x2, x_t)
-
+        ##x_t.shape为torch.Size([N, 197, 384])
         x_t = self.trans_block(x_st + x_t)
 
         if self.num_med_block > 0:
             for m in self.med_block:
                 x = m(x)
 
+        ##Transformer patch embeddings -> CNN feature maps
+        ##[N, 197, 384] -> [N, 16, 56, 56]
         x_t_r = self.expand_block(x_t, H // self.dw_stride, W // self.dw_stride)
+        ##x.shape为torch.Size([N, 64, 56, 56])
         x = self.fusion_block(x, x_t_r, return_x_2=False)
 
         return x, x_t
